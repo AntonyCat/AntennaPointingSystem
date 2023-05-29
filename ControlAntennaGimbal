@@ -1,0 +1,398 @@
+//#include<iostream.h>
+#include <Stepper.h>
+
+//Motor Setup and Initialisation
+int M1dirpin = 7;           //Motor X direction pin
+int M1steppin = 6;          //Motor X step pin
+int M1en=8;                 //Motor X enable pin
+int M2dirpin = 4;           //Motor Y direction pin
+int M2steppin = 5;          //Motor Y step pin
+int M2en=12;                //Motor Y enable pin
+
+//SYSTEM LOGIC INITIALISATION
+//azumith and elevation new and current positions
+float azuCurPos = 0;        
+float eleCurAng = 90;       //start elevation at 90 degrees, so plate is lying flat
+float azuNewPos = 0;
+float eleNewAng = 0;
+
+bool motorDirBool = true;   //Direction bool for motor, true = CCW, false = CW
+int motorMove = 0;          //motor movement for azumith plane
+
+//Azumith, elevation and COP(Centre of plate) new and current Quadrant locations
+int curAzuQ = 0;
+int newAzuQ = 0;
+int curCOPQ = 0;
+int newCOPQ = 0;
+bool acuteElev = true;      //true = elevation <90, false = elevation > 90 & <180
+
+int loopstop = 1;
+
+void setup() {
+  // put your setup code here, to run once:
+
+  //MOTOR SETUP
+  pinMode(M1dirpin,OUTPUT);
+  pinMode(M1steppin,OUTPUT);
+  pinMode(M1en,OUTPUT);
+  pinMode(M2dirpin,OUTPUT);
+  pinMode(M2steppin,OUTPUT);
+  pinMode(M2en,OUTPUT);
+
+  digitalWrite(M1en,LOW);// Low Level Enable
+  digitalWrite(M2en,LOW);// Low Level Enable
+
+
+  //SERIAL MONITOR SETUP
+  Serial.begin(9600);
+ 
+}
+
+//////////////////////////////////////////////////////////////
+
+void loop() {
+  while(loopstop == 1){
+
+    AskForInput(); 
+
+    curAzuQ = FindQuarter(azuCurPos);          //updates current position quarter
+    newAzuQ = FindQuarter(azuNewPos);         //updates new position quarter
+  
+    //determines if elevation is less than or greater than 90 degrees, true if <90
+    bool curEleAcute = isEleAcute(eleCurAng);      
+    bool newEleAcute = isEleAcute(eleNewAng);
+  
+    //determines how far azumith should move and in what direction
+    motorMove = RotandDir(azuNewPos);
+
+    //PRINTING INFORMATION
+    Serial.print("azumith Current Pos: ");
+    Serial.print(azuCurPos);
+    Serial.print(" & new angle: ");
+    Serial.println(azuNewPos);
+    Serial.print("difference in angle: ");
+    Serial.println(motorMove);
+    Serial.print("direction: ");
+    if(motorDirBool){
+      Serial.println("CCW");
+    }
+    else
+      Serial.println("CW");
+    //
+
+    //determines COP Quadrant of current and new position.
+    curCOPQ = returnCOPquart(eleCurAng,curAzuQ);
+    newCOPQ = returnCOPquart(eleNewAng,newAzuQ); 
+
+    //PRINTING INFORMATION
+    Serial.print("Quadrant of current pos: Q");
+    Serial.print(curCOPQ);
+    Serial.print(" and new pos: Q");
+    Serial.println(newCOPQ);
+    //
+
+    Serial.print("AZU TEST ");
+    Serial.println(azuNewPos);
+    
+    //Check to see if COP and Azu rot are in same or adjacent quadrants
+    bool quadSameHalf = determineSameHalf(curCOPQ,newCOPQ);
+    bool azuSameHalf = determineSameHalf(curAzuQ,newAzuQ);
+
+    //Boolean switch not working in RotandDir function...why...
+    if(quadSameHalf && !azuSameHalf){
+//       add180and90;
+
+      azuNewPos = azuNewPos + 180;
+      if(azuNewPos >360){
+        azuNewPos = azuNewPos - 360;
+      }
+
+      eleNewAng = 180 - eleNewAng; 
+      
+      motorMove = RotandDir(azuNewPos);
+      motorDirBool = !motorDirBool;
+    }
+    
+    else if(quadSameHalf && (curEleAcute =! newEleAcute)){
+      azuNewPos = azuNewPos + 180;
+      if(azuNewPos >360){
+        azuNewPos = azuNewPos - 360;
+      }
+      
+      eleNewAng = 180 - eleNewAng;
+      
+      motorMove = RotandDir(azuNewPos);
+      motorDirBool = !motorDirBool;
+    }
+    else if(!quadSameHalf && (curEleAcute == newEleAcute)){
+      azuNewPos = azuNewPos + 180;
+      if(azuNewPos >360){
+        azuNewPos = azuNewPos - 360;
+      }
+      
+      eleNewAng = 180 - eleNewAng;
+      
+      motorMove = RotandDir(azuNewPos);
+      motorDirBool = !motorDirBool;
+    }
+    else{
+      //NORMAL MOVEMENT
+
+      //Now to find out how to move the elevation
+    }
+
+    Serial.print("new Azu Loc ");
+    Serial.print(azuNewPos);
+    Serial.print(" New motor move ");
+    Serial.print(motorMove);
+    Serial.print(" New ele ");
+    Serial.print(eleNewAng);
+    Serial.print(" New Direction, where 1 is CCW: ");
+    Serial.println(motorDirBool);
+
+    float eleDiff = elevationDiff(eleCurAng,eleNewAng); 
+
+    Serial.println("Move System...");
+    delay(2000);
+
+    int azuMotorStep = ConvertToAzumithStep(motorMove);
+    int eleMotorStep = ConvertToElevationStep(eleDiff);
+
+    azuCurPos = azuNewPos;
+    eleCurAng = eleNewAng;
+    
+    Serial.print("Motor AZUMITH Step ");
+    Serial.println(azuMotorStep);
+    Serial.print("Motor ELEVATION Step ");
+    Serial.println(eleMotorStep);
+    
+    if(motorDirBool){
+      PAN_MOVEMENT_CCW(azuMotorStep);
+    }
+    else{
+      PAN_MOVEMENT_CW(azuMotorStep);
+    }
+
+    delay (1000);
+    
+    //TILT LEFT
+    if(eleMotorStep < 0){
+      eleMotorStep = eleMotorStep * -1;
+      TILT_MOVEMENT_LEFT(eleMotorStep);
+    }
+    //TILT RIGHT
+    else{
+      TILT_MOVEMENT_RIGHT(eleMotorStep);
+    }
+    
+
+
+
+    loopstop = 0;
+  }
+
+}
+
+//////////////////////////////////////////////////////////////
+
+//Make a function for direction of tilt
+void TILT_MOVEMENT_LEFT(int sMoveTilt){
+  delayMicroseconds(4);
+  digitalWrite(M1dirpin,HIGH);
+  digitalWrite(M2dirpin,LOW);
+  for(int steps=0;steps<=sMoveTilt;steps++){
+    digitalWrite(M1steppin,LOW);
+    digitalWrite(M2steppin,LOW);
+    delayMicroseconds(4);
+    digitalWrite(M1steppin,HIGH);   //rising step
+    digitalWrite(M2steppin,HIGH);
+    delay(2);
+  }
+}
+
+void TILT_MOVEMENT_RIGHT(int sMoveTilt){
+  delayMicroseconds(4);
+  digitalWrite(M1dirpin,LOW);
+  digitalWrite(M2dirpin,HIGH);
+  for(int steps=0;steps<=sMoveTilt;steps++){
+    digitalWrite(M1steppin,LOW);
+    digitalWrite(M2steppin,LOW);
+    delayMicroseconds(4);
+    digitalWrite(M1steppin,HIGH);   //rising step
+    digitalWrite(M2steppin,HIGH);
+    delay(2);
+  }
+}
+
+//make function for CW or CCW rotation
+void PAN_MOVEMENT_CW(int sMovePan){
+  delayMicroseconds(2);
+    digitalWrite(M1dirpin,LOW);
+    digitalWrite(M2dirpin,LOW);
+    for(int steps=0;steps<=sMovePan;steps++){
+      digitalWrite(M1steppin,LOW);
+      digitalWrite(M2steppin,LOW);
+      delayMicroseconds(2);
+      digitalWrite(M1steppin,HIGH);   //rising step
+      digitalWrite(M2steppin,HIGH);
+      delay(2);
+    }
+}
+
+void PAN_MOVEMENT_CCW(int sMovePan){
+  delayMicroseconds(2);
+    digitalWrite(M1dirpin,HIGH);
+    digitalWrite(M2dirpin,HIGH);
+    for(int steps=0;steps<=sMovePan;steps++){
+      digitalWrite(M1steppin,LOW);
+      digitalWrite(M2steppin,LOW);
+      delayMicroseconds(2);
+      digitalWrite(M1steppin,HIGH);   //rising step
+      digitalWrite(M2steppin,HIGH);
+      delay(2);
+    }
+}
+
+
+//void add180and90(){
+//  azuNewPos = azuNewPos + 180;
+//  if(azuNewPos >360){
+//    azuNewPos = azuNewPos - 360;
+//  }
+//  
+//  eleNewAng +=90;
+//  if(eleNewAng > 180){
+//    eleNewAng -= 180; 
+//  }
+//  motorMove = RotandDir(azuNewPos);
+//  motorDirBool = !motorDirBool;
+//}
+
+bool determineSameHalf(int currentQ, int newQ){
+  if(currentQ == newQ)
+    return true;
+
+  int temp1 = currentQ + 1;
+  if(temp1 == 5)
+    temp1 = 1;
+  if(temp1 == newQ)
+    return true;
+    
+  int temp2 = currentQ - 1;
+  if (temp2 == 0)
+    temp2 = 4;
+  if(temp2 == newQ)
+    return true;
+  else
+    return false;
+}
+
+int FindQuarter(float degree){
+    float deg = degree;
+    
+    //finds quadrant from where the degree is in 360 degrees.
+    if(0 <= deg && deg <= 90)
+        return 1;        
+    else if(90 < deg && deg <= 180)
+        return 2;
+    else if(180 < deg && deg <= 270)
+        return 3;
+    else
+        return 4;
+}  
+
+float RotandDir(float inputangle){       
+
+    float dif = inputangle - azuCurPos;           //finds difference in angle between new and current azumith position   
+
+    if(-180 < dif && dif < 0){
+        motorDirBool = false;                       //sets motor direction to CW
+        return dif * -1;                        //returns pos value
+    }
+    else if(dif <= -180){                       //sets motor direction to CCW and returns pos value
+        dif = dif + 360;
+        motorDirBool = false;
+        return dif;
+    }
+    else if(dif > 180){                         //sets motor direction to CW and returns pos value
+        dif = dif - 360;
+        motorDirBool = true;
+        return dif * -1;
+    }
+    else{                                       //no change needed, direction CCW and pos return value
+        motorDirBool = true;
+        return dif;
+    }
+}
+
+float elevationDiff(float eleCurAng, float eleNewAng){
+  float diff = eleCurAng - eleNewAng;
+  return diff;
+}
+
+int returnCOPquart(float elevationAng, int azuQ){
+    if(elevationAng > 90){
+        if(azuQ == 1)
+            return 3;
+        else if(azuQ == 2)
+            return 4;
+        else if(azuQ == 3)
+            return 1;
+        else
+            return 2;
+    }
+    else
+        return azuQ;
+} 
+
+bool isEleAcute(int elevationAngle){
+    if(elevationAngle > 90)
+        return false;
+    else
+        return true;
+}
+
+void AskForInput(){
+//    float elevationAng;
+//    float azumithRot;
+    Serial.println("Value for Azumith Rotation between 0 and 360 degrees: ");
+    
+    while(Serial.available() == 0){  
+        azuNewPos = Serial.parseFloat();
+    }
+    Serial.flush();
+  
+    Serial.print("You typed ");
+    Serial.println(azuNewPos);
+    int motorAzuStep = ConvertToAzumithStep(azuNewPos);
+    Serial.print("The motor step is ");
+    Serial.println(motorAzuStep);
+    delay(500);
+    Serial.println("Value for Elevation Angle between 0 and 180 degrees: ");
+  
+    if(Serial.available() > 0){
+      delay (5000);
+      eleNewAng = Serial.parseFloat();
+    }   
+  
+    Serial.print("You typed ");
+    Serial.println(eleNewAng);
+    int motorEleStep = ConvertToElevationStep(eleNewAng);
+    Serial.print("The motor step is ");
+    Serial.println(motorEleStep);
+}
+
+
+int ConvertToAzumithStep(float azuRot){
+  int Step = 0;
+  Step = azuRot * 6.2667;
+  Step = Step * 2;    //TEST
+  return Step;
+}
+
+int ConvertToElevationStep(float eleAng){
+  int Step = 0;
+  Step = eleAng * 6.2667;
+  Step = Step * 2;
+  return Step;
+}
